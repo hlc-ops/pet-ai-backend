@@ -5,6 +5,12 @@ model/*.engine
 model/*_openvino_model/
 model/*.torchscript
 !model/.gitkeep
+# 训练文档保留(小,能证明模型质量)
+!model/results.png
+!model/confusion_matrix.png
+!model/PR_curve.png
+!model/F1_curve.png
+!model/args.yaml
 
 # ==================== 运行时数据(每台机器不同)====================
 data/
