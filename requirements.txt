@@ -1,0 +1,9 @@
+Flask>=3.0
+Flask-CORS>=4.0
+Werkzeug>=3.0
+python-dotenv>=1.0
+requests>=2.31
+ultralytics>=8.3
+opencv-python>=4.8
+numpy>=1.26
+Pillow>=10.0

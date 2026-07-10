@@ -1,0 +1,2 @@
+# 模型权重通过 GitHub Releases 分发,不入 git 仓库
+# 部署时下载 best.pt (以及可选的 best.onnx / best_openvino_model.zip)放到本目录

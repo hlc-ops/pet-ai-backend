@@ -1,0 +1,62 @@
+# ==================== 模型权重(去 Release 挂,别入 git)====================
+model/*.pt
+model/*.onnx
+model/*.engine
+model/*_openvino_model/
+model/*.torchscript
+!model/.gitkeep
+
+# ==================== 运行时数据(每台机器不同)====================
+data/
+!data/.gitkeep
+
+# ==================== 日志 ====================
+logs/
+!logs/.gitkeep
+
+# ==================== 上传缓存 ====================
+uploads/
+snapshots/
+failed_events.jsonl
+
+# ==================== Python 常规 ====================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+htmlcov/
+.python-version
+
+# ==================== 虚拟环境 ====================
+.venv/
+venv/
+env/
+ENV/
+
+# ==================== IDE ====================
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ==================== 环境变量(含密钥)====================
+.env
+.env.local
+.env.*.local
+
+# ==================== 临时 ====================
+*.tmp
+*.bak
+*.log
+tmp/
+temp/
