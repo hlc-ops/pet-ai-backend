@@ -4,6 +4,10 @@ model/*.onnx
 model/*.engine
 model/*_openvino_model/
 model/*.torchscript
+# 顶层意外下载的权重也排除
+/*.pt
+/*.onnx
+/*.engine
 !model/.gitkeep
 # 训练文档保留(小,能证明模型质量)
 !model/results.png
