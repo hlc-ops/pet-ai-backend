@@ -38,6 +38,12 @@ LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "")
 LLM_MODEL = os.environ.get("LLM_MODEL", "")
 LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "30"))
 
+# 自动读代理配置(v9+ 新加,避免用户每次手动 set env)
+LLM_PROXY = os.environ.get("LLM_PROXY", "")
+if LLM_PROXY:
+    os.environ.setdefault("HTTP_PROXY", LLM_PROXY)
+    os.environ.setdefault("HTTPS_PROXY", LLM_PROXY)
+
 LLM_DEFAULTS = {
     "qwen": {
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
