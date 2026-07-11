@@ -169,13 +169,36 @@ def predict():
         return jsonify({"keypoints": []})
 
     # 归一化到 (N, 3) [x, y, conf]
-    # DLC 输出可能是 (N_animals, N_kp, 3),取第一个动物
     if kps.ndim == 3:
-        kps_out = kps[0]  # (24, 3)
+        # 多候选 → 选包围盒面积最大的那一个,避免 DLC 抓到椅子腿等噪声
+        best_idx = 0
+        best_area = 0.0
+        for i in range(kps.shape[0]):
+            one = kps[i]
+            good = one[one[:, 2] > 0.2] if one.shape[1] >= 3 else one
+            if len(good) < 3:
+                continue
+            xs, ys = good[:, 0], good[:, 1]
+            area = float((xs.max() - xs.min()) * (ys.max() - ys.min()))
+            if area > best_area:
+                best_area = area
+                best_idx = i
+        kps_out = kps[best_idx]
+        logger.info(f"[predict] 检出 {kps.shape[0]} 候选, "
+                    f"选 idx={best_idx} area={best_area:.0f}")
     elif kps.ndim == 2:
         kps_out = kps
     else:
         return jsonify({"keypoints": []})
+
+    # 报告 kps 分布范围, 帮助定位坐标问题
+    if kps_out.shape[1] >= 3:
+        good = kps_out[kps_out[:, 2] > 0.15]
+        if len(good):
+            logger.info(
+                f"[predict] kps 范围 x=[{good[:,0].min():.0f},{good[:,0].max():.0f}] "
+                f"y=[{good[:,1].min():.0f},{good[:,1].max():.0f}] "
+                f"img={img.shape[1]}x{img.shape[0]}")
 
     return jsonify({
         "keypoints": kps_out.tolist(),

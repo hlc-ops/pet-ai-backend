@@ -149,7 +149,8 @@ class AsyncPoseWorker:
             x1, y1, x2, y2 = best["box"]
             fh, fw = frame.shape[:2]
             bw = x2 - x1; bh = y2 - y1
-            px = int(bw * 0.4); py = int(bh * 0.4)
+            # 20% padding: crop 更紧, DLC 内部 detector 抓不到别的
+            px = int(bw * 0.2); py = int(bh * 0.2)
             cx1 = max(0, int(x1 - px)); cy1 = max(0, int(y1 - py))
             cx2 = min(fw, int(x2 + px)); cy2 = min(fh, int(y2 + py))
             if cx2 - cx1 > 40 and cy2 - cy1 > 40:
@@ -172,10 +173,19 @@ class AsyncPoseWorker:
             kps = self.pose_svc.predict(crop)
             latency = int((time.time() - t0) * 1000)
             # 翻译回全帧坐标
-            if kps is not None and (ox or oy):
-                kps = kps.copy()
-                kps[:, 0] += ox
-                kps[:, 1] += oy
+            if kps is not None:
+                # 调试:crop 内 kps 范围
+                good = kps[kps[:, 2] > 0.15] if kps.shape[1] >= 3 else kps
+                if len(good):
+                    print(f"[pose] crop {crop.shape[1]}x{crop.shape[0]} "
+                          f"offset=({ox},{oy}) "
+                          f"kps_x=[{good[:,0].min():.0f},{good[:,0].max():.0f}] "
+                          f"kps_y=[{good[:,1].min():.0f},{good[:,1].max():.0f}] "
+                          f"{latency}ms")
+                if ox or oy:
+                    kps = kps.copy()
+                    kps[:, 0] += ox
+                    kps[:, 1] += oy
             with self._lock:
                 if kps is not None:
                     self._latest = kps
