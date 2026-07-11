@@ -140,9 +140,16 @@ class LLMVerifier:
         self._event_call_count[event_id] = \
             self._event_call_count.get(event_id, 0) + 1
 
-        # 图像转 base64
+        # 图像转 base64:
+        # 1) 先降到 max 720p 边长,避免大分辨率生成 MB 级 payload
+        # 2) JPEG 质量 55(替换原 85):测下来本机对 >800KB 的 SSL POST 会 EOF
+        h, w = frame_bgr.shape[:2]
+        max_side = 720
+        if max(h, w) > max_side:
+            scale = max_side / max(h, w)
+            frame_bgr = cv2.resize(frame_bgr, (int(w*scale), int(h*scale)))
         _, buf = cv2.imencode(".jpg", frame_bgr,
-                              [cv2.IMWRITE_JPEG_QUALITY, 85])
+                              [cv2.IMWRITE_JPEG_QUALITY, 55])
         img_b64 = base64.b64encode(buf).decode("utf-8")
 
         # 构建 prompt
@@ -190,13 +197,31 @@ class LLMVerifier:
 
         url = f"{self.base_url}/chat/completions"
         t0 = time.time()
+        # 强制直连:阿里云 Qwen 是国内域名,不走本机代理
+        # trust_env=False 忽略 HTTP_PROXY/HTTPS_PROXY 环境变量
+        # verify=False 兜底本机 Clash/V2Ray 开启系统代理 MITM 时的 SSL 报错
+        session = requests.Session()
+        session.trust_env = False
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+        # 本机 Clash TUN 模式会 SSLEOFError,重试 3 次退避
+        last_err = None
+        resp = None
+        for attempt in range(3):
+            try:
+                resp = session.post(
+                    url, json=payload, headers=headers,
+                    timeout=LLM_TIMEOUT, verify=False)
+                break
+            except Exception as e:
+                last_err = e
+                if attempt < 2:
+                    time.sleep(0.8 * (attempt + 1))
+        if resp is None:
+            logger.warning(f"❌ LLM 网络重试 3 次全失败: {last_err}")
+            return None
         try:
-            # 强制直连:阿里云 Qwen 是国内域名,不走本机代理
-            # trust_env=False 忽略 HTTP_PROXY/HTTPS_PROXY 环境变量
-            session = requests.Session()
-            session.trust_env = False
-            resp = session.post(
-                url, json=payload, headers=headers, timeout=LLM_TIMEOUT)
             latency_ms = int((time.time() - t0) * 1000)
             resp.raise_for_status()
             data = resp.json()

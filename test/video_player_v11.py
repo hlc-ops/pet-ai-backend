@@ -494,6 +494,26 @@ def main():
     print(f"\n===== V11 =====")
     print(f"异步姿态: {'✓' if pose_worker.available else '❌'}")
     print(f"关键点阈值: {KP_MIN_CONF}")
+
+    # 检测 Windows 系统代理 / Clash TUN 劫持
+    try:
+        import winreg, socket
+        k = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                           r'Software\Microsoft\Windows\CurrentVersion\Internet Settings')
+        enable, _ = winreg.QueryValueEx(k, 'ProxyEnable')
+        winreg.CloseKey(k)
+        try:
+            ip = socket.gethostbyname('dashscope.aliyuncs.com')
+        except Exception:
+            ip = "解析失败"
+        fake_ip = ip.startswith("198.18.") or ip.startswith("28.")
+        if enable or fake_ip:
+            print(f"⚠  系统代理已启用 (ProxyEnable={enable})")
+            print(f"⚠  DNS: dashscope.aliyuncs.com → {ip}"
+                  f"{'  ← FAKE-IP 劫持!' if fake_ip else ''}")
+            print(f"⚠  LLM 复核可能 SSL 断连。建议关 Clash 系统代理或加 DIRECT 规则")
+    except Exception:
+        pass
     print()
 
     # 每 N 帧提交一次姿态请求(避免队列爆)
