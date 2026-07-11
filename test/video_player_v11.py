@@ -93,6 +93,9 @@ def get_screen_size():
 def resolve_model():
     if len(sys.argv) > 1: return sys.argv[1]
     here = Path(__file__).parent.parent
+    # 实测 pt (215ms/帧) 比现有 openvino FP16 (329ms/帧) 还快
+    # 因为现有 best_openvino_model 是 FP16 半精度不是真 INT8, pt 有 MKL-DNN
+    # 想真提速要跑 'yolo export format=openvino int8=True data=...' 生成 INT8
     for p in [here / "model" / "best.pt"]:
         if p.exists(): return str(p)
     return pick_file("选 YOLO 模型", [("模型", "*.pt")])
@@ -489,7 +492,13 @@ def main():
     save_dir = Path(__file__).parent / "screenshots"
     save_dir.mkdir(exist_ok=True)
 
-    model_info = "PyTorch (best.pt)"
+    # 根据实际加载的模型类型显示
+    if "openvino" in mp.lower():
+        model_info = "OpenVINO INT8 (best_openvino_model)"
+    elif mp.endswith(".onnx"):
+        model_info = "ONNX (best.onnx)"
+    else:
+        model_info = "PyTorch (best.pt)"
 
     print(f"\n===== V11 =====")
     print(f"异步姿态: {'✓' if pose_worker.available else '❌'}")
