@@ -131,24 +131,51 @@ class AsyncPoseWorker:
             self._t = threading.Thread(target=self._loop, daemon=True)
             self._t.start()
 
-    def request(self, frame):
-        """主线程调:提交姿态请求(有空槽才提交,免堆积)"""
+    def request(self, frame, animals=None):
+        """主线程调:提交姿态请求(有空槽才提交,免堆积)
+
+        如果传入 animals,把最大 bbox 加 40% padding 做 crop 送去。
+        避免 DLC 内部 detector 在整帧上错抓地面/椅子。
+        """
         if not self.available: return
         if self._req_queue.full(): return
+
+        crop_offset = (0, 0)
+        crop_img = frame
+        if animals:
+            best = max(animals,
+                       key=lambda a: (a["box"][2] - a["box"][0])
+                                     * (a["box"][3] - a["box"][1]))
+            x1, y1, x2, y2 = best["box"]
+            fh, fw = frame.shape[:2]
+            bw = x2 - x1; bh = y2 - y1
+            px = int(bw * 0.4); py = int(bh * 0.4)
+            cx1 = max(0, int(x1 - px)); cy1 = max(0, int(y1 - py))
+            cx2 = min(fw, int(x2 + px)); cy2 = min(fh, int(y2 + py))
+            if cx2 - cx1 > 40 and cy2 - cy1 > 40:
+                crop_img = frame[cy1:cy2, cx1:cx2]
+                crop_offset = (cx1, cy1)
+
         try:
-            self._req_queue.put_nowait(frame.copy())
+            self._req_queue.put_nowait((crop_img.copy(), crop_offset))
         except Exception:
             pass
 
     def _loop(self):
         while not self._stop:
             try:
-                frame = self._req_queue.get(timeout=0.5)
+                item = self._req_queue.get(timeout=0.5)
             except Empty:
                 continue
+            crop, (ox, oy) = item
             t0 = time.time()
-            kps = self.pose_svc.predict(frame)
+            kps = self.pose_svc.predict(crop)
             latency = int((time.time() - t0) * 1000)
+            # 翻译回全帧坐标
+            if kps is not None and (ox or oy):
+                kps = kps.copy()
+                kps[:, 0] += ox
+                kps[:, 1] += oy
             with self._lock:
                 if kps is not None:
                     self._latest = kps
@@ -493,7 +520,7 @@ def main():
 
             # === 异步姿态:每秒提交 1 次 ===
             if animals and frame_idx % POSE_REQ_EVERY_N == 0:
-                pose_worker.request(frame)
+                pose_worker.request(frame, animals=animals)
 
             # 读缓存关键点画骨架 + 排泄判定
             kps, kp_time, pose_features = pose_worker.latest
@@ -555,7 +582,17 @@ def main():
             cv2.imshow(win, display)
 
         key = cv2.waitKey(delay if not paused else 30) & 0xFF
-        if key in (ord("q"), 27): break
+        if key in (ord("q"), 27):
+            # 补 flush:退出前把进行中的事件都 finalize
+            for e in drink_rules.force_flush(frame_idx / src_fps, frame):
+                line = f"drink {e.animal_cls} {int(e.duration_sec)}s LLM✓{e.llm_confirmed_count}"
+                latest.append(line)
+                print(f"[事件-退出补] {line}")
+            for e in exc_detector.force_flush(frame_idx / src_fps):
+                line = f"排泄 {e['animal_cls']} {int(e['duration'])}s"
+                latest.append(line)
+                print(f"[事件-退出补] {line}")
+            break
         elif key == ord(" "): paused = not paused
         elif key == ord("s"):
             fp = save_dir / f"snap_{datetime.now():%Y%m%d_%H%M%S}.png"
