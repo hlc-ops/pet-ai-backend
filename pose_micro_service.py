@@ -30,8 +30,9 @@ from flask import Flask, jsonify, request
 # ===== 环境准备 =====
 os.environ.setdefault('DLC_HOME_DIR', 'D:/ai_models/dlc_home')
 os.environ.setdefault('TORCH_HOME', 'D:/ai_models/torch_home')
-os.environ.setdefault('HTTP_PROXY', 'http://127.0.0.1:7897')
-os.environ.setdefault('HTTPS_PROXY', 'http://127.0.0.1:7897')
+# 权重已经在 D:\venvs\dlc\Lib\site-packages\deeplabcut\modelzoo\checkpoints\
+# 不需要联网下载, 也不需要代理. 交付到客户机不受代理影响
+# (以前这里硬编码 HTTP_PROXY=127.0.0.1:7897 是为了首次下载权重)
 
 # 忽略 SSL 校验
 ssl._create_default_https_context = ssl._create_unverified_context
