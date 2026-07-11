@@ -265,10 +265,12 @@ def parse_and_draw(frame, r, names, downgrade_stats):
 
 
 def draw_trigger_indicator(frame, animals, debug_pairs):
+    """cascade_rules debug_pairs 用 l2_pass 作为最终触发标志"""
     trig = set()
     for i, a in enumerate(animals):
         for p in debug_pairs:
-            if p["animal"] == a["cls"] and p["trigger"]:
+            if p.get("animal") == a["cls"] and (
+                    p.get("l2_pass") or p.get("trigger")):
                 trig.add(i)
     for i in trig:
         box = animals[i]["box"]
