@@ -459,6 +459,9 @@ def main():
     max_w = int(scr_w * 0.80)
     max_h = int(scr_h * 0.80)
 
+    # 清掉上次 Ctrl+C 可能残留的空窗
+    cv2.destroyAllWindows()
+
     win = "宠物 AI V11 · 异步姿态"
     cv2.namedWindow(win, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(win, max_w, max_h)
