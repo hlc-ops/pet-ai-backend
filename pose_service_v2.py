@@ -33,55 +33,87 @@ import requests
 logger = logging.getLogger(__name__)
 
 
-# ==================== SuperAnimal 24 关键点定义 ====================
+# ==================== SuperAnimal 39 关键点定义(DLC 3.0 官方) ====================
+# 从 D:\venvs\dlc\Lib\site-packages\deeplabcut\modelzoo\project_configs\superanimal_quadruped.yaml 读取
+# 注:"thai" 是官方笔误,实际意思是 "thigh" (大腿)
 SUPERANIMAL_KEYPOINTS = [
-    "nose",             # 0
-    "upper_jaw",        # 1
-    "lower_jaw",        # 2
-    "mouth_end_right",  # 3
-    "mouth_end_left",   # 4
-    "right_eye",        # 5
-    "right_earbase",    # 6
-    "right_earend",     # 7
-    "right_antler_base",# 8
-    "right_antler_end", # 9
-    "left_eye",         # 10
-    "left_earbase",     # 11
-    "left_earend",      # 12
-    "left_antler_base", # 13
-    "left_antler_end",  # 14
-    "neck_base",        # 15
-    "neck_end",         # 16
-    "throat_base",      # 17
-    "throat_end",       # 18
-    "back_base",        # 19
-    "back_end",         # 20
-    "back_middle",      # 21
-    "tail_base",        # 22
-    "tail_end",         # 23
+    "nose",              # 0
+    "upper_jaw",         # 1
+    "lower_jaw",         # 2
+    "mouth_end_right",   # 3
+    "mouth_end_left",    # 4
+    "right_eye",         # 5
+    "right_earbase",     # 6
+    "right_earend",      # 7
+    "right_antler_base", # 8  (鹿角,猫狗无)
+    "right_antler_end",  # 9
+    "left_eye",          # 10
+    "left_earbase",      # 11
+    "left_earend",       # 12
+    "left_antler_base",  # 13
+    "left_antler_end",   # 14
+    "neck_base",         # 15
+    "neck_end",          # 16
+    "throat_base",       # 17
+    "throat_end",        # 18
+    "back_base",         # 19  肩胛(前肩位)
+    "back_end",          # 20  髋部(骨盆位)
+    "back_middle",       # 21  腰
+    "tail_base",         # 22  尾根
+    "tail_end",          # 23  尾尖
+    "front_left_thai",   # 24  前左大腿
+    "front_left_knee",   # 25  前左膝
+    "front_left_paw",    # 26  前左爪
+    "front_right_thai",  # 27
+    "front_right_knee",  # 28
+    "front_right_paw",   # 29
+    "back_left_paw",     # 30  ← 后左爪
+    "back_left_thai",    # 31  ← 后左大腿(排泄核心特征)
+    "back_right_thai",   # 32  ← 后右大腿
+    "back_left_knee",    # 33  ← 后左膝
+    "back_right_knee",   # 34
+    "back_right_paw",    # 35
+    "belly_bottom",      # 36  腹底
+    "body_middle_right", # 37
+    "body_middle_left",  # 38
 ]
 
-# 骨架连线(可视化用)
+# 骨架连线(基于真解剖学)
 SKELETON_LINKS = [
     # 头部
     ("nose", "upper_jaw"),
     ("upper_jaw", "lower_jaw"),
-    ("upper_jaw", "right_eye"),
-    ("upper_jaw", "left_eye"),
+    ("nose", "right_eye"),
+    ("nose", "left_eye"),
     ("right_eye", "right_earbase"),
     ("right_earbase", "right_earend"),
     ("left_eye", "left_earbase"),
     ("left_earbase", "left_earend"),
-    # 脖子背部
-    ("nose", "neck_base"),
+    # 头 → 颈 → 背(脊柱)
+    ("upper_jaw", "throat_base"),
+    ("throat_base", "neck_base"),
     ("neck_base", "back_base"),
     ("back_base", "back_middle"),
     ("back_middle", "back_end"),
     ("back_end", "tail_base"),
     ("tail_base", "tail_end"),
-    # 喉咙(前颈)
-    ("neck_base", "throat_base"),
-    ("throat_base", "throat_end"),
+    # 前腿(左右)
+    ("back_base", "front_left_thai"),
+    ("front_left_thai", "front_left_knee"),
+    ("front_left_knee", "front_left_paw"),
+    ("back_base", "front_right_thai"),
+    ("front_right_thai", "front_right_knee"),
+    ("front_right_knee", "front_right_paw"),
+    # 后腿(左右) ← 排泄识别主战场
+    ("back_end", "back_left_thai"),
+    ("back_left_thai", "back_left_knee"),
+    ("back_left_knee", "back_left_paw"),
+    ("back_end", "back_right_thai"),
+    ("back_right_thai", "back_right_knee"),
+    ("back_right_knee", "back_right_paw"),
+    # 身体侧线
+    ("body_middle_right", "belly_bottom"),
+    ("body_middle_left", "belly_bottom"),
 ]
 
 
@@ -103,44 +135,36 @@ class PoseServiceClient:
         return self._available
 
     def predict(self, image_bgr: np.ndarray,
-                bbox: Tuple[float, float, float, float]) -> Optional[np.ndarray]:
+                bbox=None) -> Optional[np.ndarray]:
         """
+        V2: 送整帧不裁 crop(避免 DLC detector 在小 crop 里找不到动物)
+
         输入:
             image_bgr: 原始 BGR 图 (H, W, 3)
-            bbox: (x1, y1, x2, y2) 动物边界框
+            bbox: 忽略,DLC 内部会做 detection
         输出:
-            keypoints: (24, 3) [x, y, confidence],绝对坐标
-            或 None(服务不可用/失败)
+            keypoints: (39, 3) [x, y, confidence],绝对坐标
         """
         if not self.available:
             return None
-        # 裁 bbox 内区域
-        h, w = image_bgr.shape[:2]
-        x1, y1, x2, y2 = [int(max(0, v)) for v in bbox]
-        x2 = min(w, x2); y2 = min(h, y2)
-        if x2 - x1 < 20 or y2 - y1 < 20:
-            return None
-        crop = image_bgr[y1:y2, x1:x2]
-
-        # 编码 + POST
         import cv2, base64
-        _, buf = cv2.imencode(".jpg", crop,
-                              [cv2.IMWRITE_JPEG_QUALITY, 90])
+        # 送整帧
+        _, buf = cv2.imencode(".jpg", image_bgr,
+                              [cv2.IMWRITE_JPEG_QUALITY, 85])
         b64 = base64.b64encode(buf).decode()
 
         try:
             r = requests.post(
                 f"{self.url}/predict",
                 json={"image_b64": b64},
-                timeout=5)
+                timeout=15)
             if r.status_code != 200:
                 return None
             data = r.json()
-            kps = np.array(data["keypoints"])  # (24, 3) 相对 crop
-            # 转成绝对坐标
-            kps[:, 0] += x1
-            kps[:, 1] += y1
-            return kps
+            kps_list = data.get("keypoints", [])
+            if not kps_list:
+                return None
+            return np.array(kps_list, dtype=np.float32)
         except Exception as e:
             logger.debug(f"pose 请求失败: {e}")
             return None
@@ -205,12 +229,22 @@ def compute_pose_features(keypoints) -> dict:
     back_middle = first_available("back_middle")
     tail_base = get_pt("tail_base")
 
+    # ⭐ 后腿关键点(排泄识别核心)
+    bl_thai = get_pt("back_left_thai")
+    bl_knee = get_pt("back_left_knee")
+    bl_paw = get_pt("back_left_paw")
+    br_thai = get_pt("back_right_thai")
+    br_knee = get_pt("back_right_knee")
+    br_paw = get_pt("back_right_paw")
+
     if shoulder is None or hip is None:
         return {
             "valid": False,
             "hip_shoulder_dy": 0,
             "back_curvature": 0,
             "tail_raised": False,
+            "rear_leg_angle": 180,
+            "legs_bent": False,
         }
 
     hip_shoulder_dy = float(hip[1] - shoulder[1])
@@ -231,11 +265,34 @@ def compute_pose_features(keypoints) -> dict:
     if tail_base is not None:
         tail_raised = bool(float(tail_base[1]) < float(hip[1]) - 5)
 
+    # ⭐ 后腿弯曲角度(排泄核心特征)
+    def _angle_deg(p1, p2, p3):
+        """三点夹角(p2 是顶点),返回度"""
+        v1 = np.asarray(p1, dtype=np.float32) - np.asarray(p2, dtype=np.float32)
+        v2 = np.asarray(p3, dtype=np.float32) - np.asarray(p2, dtype=np.float32)
+        n1, n2 = float(np.linalg.norm(v1)), float(np.linalg.norm(v2))
+        if n1 < 1e-6 or n2 < 1e-6:
+            return 180.0
+        cos = float(np.dot(v1, v2)) / (n1 * n2)
+        cos = max(-1.0, min(1.0, cos))
+        return float(np.degrees(np.arccos(cos)))
+
+    # 左右后腿 thai-knee-paw 三点角度,180 = 直腿站,60-90 = 深蹲
+    rear_angles = []
+    if bl_thai is not None and bl_knee is not None and bl_paw is not None:
+        rear_angles.append(_angle_deg(bl_thai, bl_knee, bl_paw))
+    if br_thai is not None and br_knee is not None and br_paw is not None:
+        rear_angles.append(_angle_deg(br_thai, br_knee, br_paw))
+    rear_leg_angle = float(np.mean(rear_angles)) if rear_angles else 180.0
+    legs_bent = rear_leg_angle < 110  # 排泄蹲姿
+
     return {
         "valid": True,
         "hip_shoulder_dy": hip_shoulder_dy,
         "back_curvature": back_curvature,
         "tail_raised": tail_raised,
+        "rear_leg_angle": rear_leg_angle,
+        "legs_bent": legs_bent,
         "shoulder": (float(shoulder[0]), float(shoulder[1])),
         "hip": (float(hip[0]), float(hip[1])),
         "tail_base": (float(tail_base[0]), float(tail_base[1]))
