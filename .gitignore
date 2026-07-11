@@ -70,3 +70,4 @@ Thumbs.db
 *.log
 tmp/
 temp/
+pip_cache_d/
