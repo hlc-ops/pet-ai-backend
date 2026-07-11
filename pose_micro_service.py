@@ -164,7 +164,18 @@ def predict():
     except Exception as e:
         return jsonify({"error": f"decode: {e}"}), 400
 
-    kps = _predict_keypoints(img)
+    # 上采样小 crop 到 1024,给 fasterrcnn 足够信息找到真狗
+    orig_h, orig_w = img.shape[:2]
+    scale = 1.0
+    if max(orig_h, orig_w) < 1024:
+        scale = 1024 / max(orig_h, orig_w)
+        img_up = cv2.resize(img, (int(orig_w * scale), int(orig_h * scale)))
+        logger.info(f"[predict] crop 上采样 {orig_w}x{orig_h} → "
+                    f"{img_up.shape[1]}x{img_up.shape[0]} (scale={scale:.2f})")
+    else:
+        img_up = img
+
+    kps = _predict_keypoints(img_up)
     if kps is None:
         return jsonify({"keypoints": []})
 
@@ -191,14 +202,29 @@ def predict():
     else:
         return jsonify({"keypoints": []})
 
-    # 报告 kps 分布范围, 帮助定位坐标问题
+    # 缩回原 crop 尺寸(如果之前上采样过)
+    if scale != 1.0:
+        kps_out = kps_out.copy()
+        kps_out[:, 0] /= scale
+        kps_out[:, 1] /= scale
+
+    # 兜底过滤: kps 覆盖面积 < 25% crop 面积视为 DLC 误检, 返空
     if kps_out.shape[1] >= 3:
         good = kps_out[kps_out[:, 2] > 0.15]
-        if len(good):
+        if len(good) >= 3:
+            xs, ys = good[:, 0], good[:, 1]
+            kps_area = float((xs.max() - xs.min()) * (ys.max() - ys.min()))
+            crop_area = float(orig_h * orig_w)
+            ratio = kps_area / crop_area if crop_area > 0 else 0
             logger.info(
-                f"[predict] kps 范围 x=[{good[:,0].min():.0f},{good[:,0].max():.0f}] "
-                f"y=[{good[:,1].min():.0f},{good[:,1].max():.0f}] "
-                f"img={img.shape[1]}x{img.shape[0]}")
+                f"[predict] kps 范围 x=[{xs.min():.0f},{xs.max():.0f}] "
+                f"y=[{ys.min():.0f},{ys.max():.0f}] "
+                f"img={orig_w}x{orig_h} 占比={ratio*100:.0f}%")
+            if ratio < 0.25:
+                logger.warning(
+                    f"[predict] ❌ 拒绝: kps 只占 crop {ratio*100:.0f}%, "
+                    f"极可能是 DLC 抓错噪声, 返空")
+                return jsonify({"keypoints": []})
 
     return jsonify({
         "keypoints": kps_out.tolist(),
