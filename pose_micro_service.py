@@ -1,121 +1,157 @@
-"""姿态微服务 · 独立跑在 D:\venvs\dlc 环境
+"""姿态微服务 · DLC 3.0 + SuperAnimal-Quadruped
 
 启动:
     D:\venvs\dlc\Scripts\python D:\pet_ai_delivery\pose_micro_service.py
 
 API:
-    GET  /health         → {"status": "ok", "model": "..."}
+    GET  /health         → {"status": "ok", "model_ready": true}
     POST /predict
-        Body: {"image_b64": "base64 编码 JPG"}
-        Response: {"keypoints": [[x, y, conf], ...24]}
+        Body: {"image_b64": "..."}
+        Response: {"keypoints": [[x, y, conf], ...]}
 
-主进程通过 pose_service_v2.py 里的 PoseServiceClient 调用。
+策略:
+- 用 DLC 的 superanimal_analyze_images(),把请求图存临时目录跑推理
+- 首次调用会加载模型(慢,10-30 秒)
+- 后续每帧 300-800ms (CPU rtmpose_s)
 """
 import base64
 import io
 import logging
 import os
-import sys
+import ssl
+import tempfile
+import uuid
 from pathlib import Path
 
 import cv2
 import numpy as np
 from flask import Flask, jsonify, request
 
+# ===== 环境准备 =====
+os.environ.setdefault('DLC_HOME_DIR', 'D:/ai_models/dlc_home')
+os.environ.setdefault('TORCH_HOME', 'D:/ai_models/torch_home')
+os.environ.setdefault('HTTP_PROXY', 'http://127.0.0.1:7897')
+os.environ.setdefault('HTTPS_PROXY', 'http://127.0.0.1:7897')
 
-logging.basicConfig(level=logging.INFO)
+# 忽略 SSL 校验
+ssl._create_default_https_context = ssl._create_unverified_context
+
+# 强制 torch 用 CPU
+import torch
+_orig_load = torch.load
+def cpu_load(*args, **kwargs):
+    kwargs.setdefault('map_location', 'cpu')
+    return _orig_load(*args, **kwargs)
+torch.load = cpu_load
+
+
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s [%(levelname)s] %(message)s',
+                    datefmt='%H:%M:%S')
 logger = logging.getLogger("pose_service")
-
-SUPERANIMAL_MODEL_DIR = r"D:\ai_models\superanimal"
-DEFAULT_IMGSZ = 256
-
 
 app = Flask(__name__)
 
+TMP_DIR = Path("D:/pytemp/pose_service")
+TMP_DIR.mkdir(parents=True, exist_ok=True)
+OUT_DIR = Path("D:/pytemp/pose_service_out")
+OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# ==================== 模型加载 ====================
-_predictor = None
+
+# ==================== 加载 DLC API ====================
+_analyze_fn = None
 
 
 def _load_dlc():
-    """加载 DLC SuperAnimal-Quadruped
-
-    尝试 3 种加载方式,任一成功就返回:
-    1. DLC 3.0 官方 API (deeplabcut.pose_estimation_pytorch)
-    2. dlclive 快速推理
-    3. 直接 TF checkpoint(备用)
-    """
-    global _predictor
-
-    # 尝试 1: DLC 3.0 官方(PyTorch 版)
-    try:
-        import deeplabcut
-        from deeplabcut.pose_estimation_pytorch.apis import PosePredictor
-        pose_cfg = Path(SUPERANIMAL_MODEL_DIR) / "pose_cfg.yaml"
-        if pose_cfg.exists():
-            logger.info(f"[+] 加载 DLC PyTorch 预测器 from {pose_cfg}")
-            _predictor = ("dlc3", pose_cfg)
-            return
-    except ImportError as e:
-        logger.warning(f"DLC 3 未装或版本不对: {e}")
-    except Exception as e:
-        logger.warning(f"DLC 3 加载失败: {e}")
-
-    # 尝试 2: dlclive
-    try:
-        from dlclive import DLCLive
-        logger.info("[+] 尝试 dlclive")
-        dlc_live = DLCLive(SUPERANIMAL_MODEL_DIR, resize=1.0)
-        dlc_live.init_inference(
-            np.zeros((DEFAULT_IMGSZ, DEFAULT_IMGSZ, 3), dtype=np.uint8))
-        _predictor = ("dlclive", dlc_live)
-        logger.info("[+] dlclive 就绪")
-        return
-    except ImportError:
-        logger.warning("dlclive 未装")
-    except Exception as e:
-        logger.warning(f"dlclive 加载失败: {e}")
-
-    logger.error("❌ 所有姿态后端加载失败,服务将返回空关键点")
-    _predictor = None
+    global _analyze_fn
+    from deeplabcut.pose_estimation_pytorch.apis.analyze_images import (
+        superanimal_analyze_images)
+    _analyze_fn = superanimal_analyze_images
+    logger.info("✅ DLC superanimal_analyze_images 已加载")
 
 
 def _predict_keypoints(image_bgr):
-    """输入 BGR 图,返回 (24, 3) [x, y, conf] 或 None"""
-    if _predictor is None:
+    """
+    输入 BGR 图,返回 keypoints (N_animals, N_kp, 3) 或 None
+    N_kp = 24 for SuperAnimal-Quadruped
+    """
+    if _analyze_fn is None:
         return None
 
-    backend, obj = _predictor
+    # 存临时文件
+    tmp_name = f"{uuid.uuid4().hex}.jpg"
+    tmp_path = TMP_DIR / tmp_name
+    cv2.imwrite(str(tmp_path), image_bgr, [cv2.IMWRITE_JPEG_QUALITY, 90])
+
     try:
-        if backend == "dlc3":
-            # DLC 3.0 PyTorch predictor
-            # 这里需要根据实际 DLC 3.0 API 完善
-            from deeplabcut.pose_estimation_pytorch.apis import (
-                get_inference_runner)
-            # TODO: 完善 DLC 3.0 推理调用
+        result = _analyze_fn(
+            superanimal_name='superanimal_quadruped',
+            model_name='rtmpose_s',
+            detector_name='fasterrcnn_mobilenet_v3_large_fpn',
+            images=[str(tmp_path)],
+            out_folder=str(OUT_DIR),
+            max_individuals=3,
+            device='cpu',
+        )
+
+        # 解析返回值
+        if not isinstance(result, dict):
             return None
-        elif backend == "dlclive":
-            kps = obj.get_pose(image_bgr)
-            # dlclive 返回 (N_keypoints, 3) = [x, y, conf]
-            return kps
-    except Exception as e:
-        logger.error(f"推理失败: {e}")
+
+        # result 应该有 predictions per image
+        image_key = None
+        for k in result.keys():
+            if tmp_name in str(k) or str(tmp_path) in str(k):
+                image_key = k
+                break
+        if image_key is None:
+            # 取第一个 key
+            keys = list(result.keys())
+            if not keys:
+                return None
+            image_key = keys[0]
+
+        pred = result[image_key]
+        # pred 结构参考 DLC 3.0 输出
+        # 通常是 dict 有 'bodyparts' 或 'poses' 字段
+        if isinstance(pred, dict):
+            for key in ['poses', 'bodyparts', 'keypoints']:
+                if key in pred:
+                    return np.asarray(pred[key])
+            # 兜底:直接取 dict values
+            for v in pred.values():
+                if isinstance(v, np.ndarray) and v.ndim >= 2:
+                    return v
+        elif isinstance(pred, np.ndarray):
+            return pred
+
         return None
+    except Exception as e:
+        logger.error(f"推理错误: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+    finally:
+        try:
+            tmp_path.unlink()
+        except Exception:
+            pass
 
 
-# ==================== HTTP 路由 ====================
+# ==================== 路由 ====================
 @app.route("/health")
 def health():
     return jsonify({
-        "status": "ok" if _predictor is not None else "degraded",
-        "backend": _predictor[0] if _predictor else None,
-        "model_dir": SUPERANIMAL_MODEL_DIR,
+        "status": "ok" if _analyze_fn is not None else "not-ready",
+        "model_ready": _analyze_fn is not None,
+        "backend": "DLC 3.0 + SuperAnimal-Quadruped rtmpose_s",
+        "device": "cpu",
     })
 
 
 @app.route("/predict", methods=["POST"])
 def predict():
-    data = request.get_json()
+    data = request.get_json(silent=True)
     if not data or "image_b64" not in data:
         return jsonify({"error": "missing image_b64"}), 400
 
@@ -132,16 +168,25 @@ def predict():
     if kps is None:
         return jsonify({"keypoints": []})
 
+    # 归一化到 (N, 3) [x, y, conf]
+    # DLC 输出可能是 (N_animals, N_kp, 3),取第一个动物
+    if kps.ndim == 3:
+        kps_out = kps[0]  # (24, 3)
+    elif kps.ndim == 2:
+        kps_out = kps
+    else:
+        return jsonify({"keypoints": []})
+
     return jsonify({
-        "keypoints": kps.tolist(),
-        "shape": list(kps.shape),
+        "keypoints": kps_out.tolist(),
+        "shape": list(kps_out.shape),
     })
 
 
 if __name__ == "__main__":
-    print(f"===== SuperAnimal 姿态微服务 =====")
-    print(f"模型目录: {SUPERANIMAL_MODEL_DIR}")
+    print("===== 姿态微服务 · SuperAnimal-Quadruped =====")
+    print("首次加载 5-15 秒...")
     _load_dlc()
-    print(f"后端: {_predictor[0] if _predictor else 'unavailable'}")
     print(f"监听: http://127.0.0.1:8090")
-    app.run(host="127.0.0.1", port=8090, debug=False, threaded=True)
+    print(f"健康检查: curl http://127.0.0.1:8090/health")
+    app.run(host="127.0.0.1", port=8090, debug=False, threaded=False)
