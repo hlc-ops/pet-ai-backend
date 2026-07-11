@@ -262,13 +262,19 @@ def draw_panel(h, pose_available, llm_available, ongoing_drink,
     if ongoing_drink:
         for k, ev in list(ongoing_drink.items())[:2]:
             dur = ev.last_seen - ev.start_time
-            confirmed = sum(1 for r in ev.llm_results if r.confirmed)
+            # cascade_rules OngoingEvent 用 3 个单独字段
+            llm_res = [r for r in (getattr(ev, 'llm_start_result', None),
+                                    getattr(ev, 'llm_mid_result', None),
+                                    getattr(ev, 'llm_end_result', None))
+                        if r is not None]
+            confirmed = sum(1 for r in llm_res if r.confirmed)
+            calls = len(llm_res)
             panel = cv2_zh(panel,
                           f" {ev.animal_cls} DRINK {dur:.1f}s",
                           (10, y), 11, (255, 255, 100))
             y += 13
             panel = cv2_zh(panel,
-                          f"  LLM {confirmed}/{ev.llm_calls}",
+                          f"  LLM {confirmed}/{calls}",
                           (10, y), 10, (255, 255, 100))
             y += 15
     if ongoing_exc:
@@ -383,6 +389,7 @@ def main():
 
             now = frame_idx / src_fps
             # 饮水检测
+            fh, fw = frame.shape[:2]
             was = set(drink_rules.ongoing.keys())
             debug_pairs, drink_completed = drink_rules.update(
                 animals, bowls, now, frame_bgr=frame)
@@ -425,11 +432,12 @@ def main():
             for k, ev in drink_rules.ongoing.items():
                 dur = ev.last_seen - ev.start_time
                 active_texts.append(
-                    f"🐾 {ev.animal_cls.upper()} DRINK {dur:.1f}s")
+                    f"CAT DRINK {dur:.1f}s" if ev.animal_cls == "cat"
+                    else f"{ev.animal_cls.upper()} DRINK {dur:.1f}s")
             for k, ev in exc_detector.ongoing.items():
                 dur = ev.last_seen - ev.start_time
                 active_texts.append(
-                    f"💩 {ev.animal_cls.upper()} 排泄 {dur:.1f}s")
+                    f"[排泄] {ev.animal_cls.upper()} {dur:.1f}s")
 
             banner = draw_banner(fw, active_texts, flash)
             info = np.zeros((30, fw, 3), dtype=np.uint8)
