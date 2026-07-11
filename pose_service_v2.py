@@ -157,35 +157,54 @@ def get_pose_service() -> PoseServiceClient:
 
 
 # ==================== 姿态特征提取(排泄识别用) ====================
-def compute_pose_features(keypoints: np.ndarray) -> dict:
+def compute_pose_features(keypoints) -> dict:
     """
-    从 24 点姿态提取排泄识别的关键特征
+    从姿态提取排泄识别的关键特征
 
-    返回:
-        hip_shoulder_dy: 髋-肩 y 差(髋比肩低 = 蹲)
-        back_curvature: 背部弯曲度
-        rear_leg_bent: 后腿是否弯曲(通过 back_end vs tail_base 角度近似)
-        tail_raised: 尾巴翘起(cat 主要)
-        valid: 特征是否可信(关键点存在)
+    keypoints 可以是 numpy array 或 list,形状 (N, 3) [x, y, conf]
     """
-    def get(idx, min_conf=0.3):
-        if idx >= len(keypoints) or keypoints[idx, 2] < min_conf:
+    kps = np.asarray(keypoints, dtype=np.float32)
+    if kps.ndim == 1:
+        # 单个点 flat 数据 -> reshape
+        if kps.size % 3 == 0:
+            kps = kps.reshape(-1, 3)
+    if kps.ndim != 2 or kps.shape[1] < 2:
+        return {
+            "valid": False,
+            "hip_shoulder_dy": 0,
+            "back_curvature": 0,
+            "tail_raised": False,
+        }
+
+    N = kps.shape[0]
+
+    def get_pt(kp_name, min_conf=0.3):
+        """按关键点名称索引;不存在或置信度低返回 None"""
+        try:
+            i = SUPERANIMAL_KEYPOINTS.index(kp_name)
+        except ValueError:
             return None
-        return keypoints[idx][:2]
+        if i >= N:
+            return None
+        pt = kps[i]
+        if pt.shape[0] >= 3 and pt[2] < min_conf:
+            return None
+        return pt[:2]
 
-    idx = SUPERANIMAL_KEYPOINTS.index
-    nose = get(idx("nose"))
-    neck_base = get(idx("neck_base"))
-    back_base = get(idx("back_base"))
-    back_middle = get(idx("back_middle"))
-    back_end = get(idx("back_end"))
-    tail_base = get(idx("tail_base"))
-    tail_end = get(idx("tail_end"))
+    def first_available(*names):
+        """按顺序找第一个可用的关键点"""
+        for n in names:
+            p = get_pt(n)
+            if p is not None:
+                return p
+        return None
 
-    # 用 back_base 代替肩(neck_base 顶部)
-    # 用 back_end 代替髋(靠近尾根)
-    shoulder = neck_base or back_base
-    hip = back_end
+    # 尝试各种可能的"肩部"和"髋部"关键点
+    shoulder = first_available("neck_base", "back_base", "withers")
+    hip = first_available("back_end", "tail_base")
+    back_middle = first_available("back_middle")
+    tail_base = get_pt("tail_base")
+
     if shoulder is None or hip is None:
         return {
             "valid": False,
@@ -194,31 +213,31 @@ def compute_pose_features(keypoints: np.ndarray) -> dict:
             "tail_raised": False,
         }
 
-    hip_shoulder_dy = hip[1] - shoulder[1]
+    hip_shoulder_dy = float(hip[1] - shoulder[1])
 
     # 背部曲率:三点 shoulder-back_middle-hip 偏离直线距离
-    back_curvature = 0
+    back_curvature = 0.0
     if back_middle is not None:
-        v1 = np.array(shoulder)
-        v2 = np.array(back_middle)
-        v3 = np.array(hip)
-        # 点 v2 到线 v1v3 的距离
-        line_len = np.linalg.norm(v3 - v1) + 1e-6
+        v1 = np.asarray(shoulder, dtype=np.float32)
+        v2 = np.asarray(back_middle, dtype=np.float32)
+        v3 = np.asarray(hip, dtype=np.float32)
+        line_len = float(np.linalg.norm(v3 - v1)) + 1e-6
         area = abs((v3[0] - v1[0]) * (v1[1] - v2[1]) -
                     (v1[0] - v2[0]) * (v3[1] - v1[1]))
-        back_curvature = area / line_len / line_len
+        back_curvature = float(area / (line_len * line_len))
 
     # 尾巴翘起:tail_base y < hip y (即抬高)
     tail_raised = False
-    if tail_base is not None and hip is not None:
-        tail_raised = tail_base[1] < hip[1] - 5
+    if tail_base is not None:
+        tail_raised = bool(float(tail_base[1]) < float(hip[1]) - 5)
 
     return {
         "valid": True,
-        "hip_shoulder_dy": float(hip_shoulder_dy),
-        "back_curvature": float(back_curvature),
-        "tail_raised": bool(tail_raised),
-        "shoulder": tuple(shoulder),
-        "hip": tuple(hip),
-        "tail_base": tuple(tail_base) if tail_base is not None else None,
+        "hip_shoulder_dy": hip_shoulder_dy,
+        "back_curvature": back_curvature,
+        "tail_raised": tail_raised,
+        "shoulder": (float(shoulder[0]), float(shoulder[1])),
+        "hip": (float(hip[0]), float(hip[1])),
+        "tail_base": (float(tail_base[0]), float(tail_base[1]))
+            if tail_base is not None else None,
     }
