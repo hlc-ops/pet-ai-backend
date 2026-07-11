@@ -90,7 +90,7 @@ def _predict_keypoints(image_bgr):
             detector_name='fasterrcnn_mobilenet_v3_large_fpn',
             images=[str(tmp_path)],
             out_folder=str(OUT_DIR),
-            max_individuals=3,
+            max_individuals=1,   # 只要 1 只!调 3 会强制输出 3 组幻觉 kps
             device='cpu',
         )
 

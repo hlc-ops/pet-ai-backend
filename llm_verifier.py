@@ -191,11 +191,12 @@ class LLMVerifier:
         url = f"{self.base_url}/chat/completions"
         t0 = time.time()
         try:
-            # 强制直连:阿里云 Qwen 是国内域名,任何代理都可能中间人 SSL
-            # 显式 proxies={} 覆盖 HTTP_PROXY/HTTPS_PROXY 环境变量
-            resp = requests.post(
-                url, json=payload, headers=headers, timeout=LLM_TIMEOUT,
-                proxies={"http": None, "https": None})
+            # 强制直连:阿里云 Qwen 是国内域名,不走本机代理
+            # trust_env=False 忽略 HTTP_PROXY/HTTPS_PROXY 环境变量
+            session = requests.Session()
+            session.trust_env = False
+            resp = session.post(
+                url, json=payload, headers=headers, timeout=LLM_TIMEOUT)
             latency_ms = int((time.time() - t0) * 1000)
             resp.raise_for_status()
             data = resp.json()
