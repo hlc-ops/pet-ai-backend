@@ -73,7 +73,7 @@ MAX_GAP_SEC = 1.5
 AGNOSTIC_NMS = True
 PET_UNCERTAINTY_THRESHOLD = 0.15
 PET_MAX_CONF = 0.60
-KP_MIN_CONF = 0.25
+KP_MIN_CONF = 0.15   # 降到 0.15 让虚点也画,狗低头喝水时面部/前爪都是遮挡的
 
 
 def pick_file(title, filetypes):

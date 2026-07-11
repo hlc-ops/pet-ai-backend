@@ -354,18 +354,15 @@ class CascadeRuleEngine:
         )
 
     def force_flush(self, now, frame_bgr=None):
+        """强制收尾:不再调 LLM,直接 finalize
+
+        用户按 Q 退出时不该被网络请求卡住。
+        已有的 llm_start_result / llm_mid_result 会照常保留在事件里。
+        """
         finalized = []
         for key, ev in self.ongoing.items():
             dur = ev.last_seen - ev.start_time
             if dur >= MIN_DURATION_SEC:
-                if (self.verifier and self.verifier.available
-                        and frame_bgr is not None
-                        and ev.llm_end_result is None):
-                    ev.llm_end_result = self.verifier.verify_behavior(
-                        frame_bgr, ev.event_type, ev.animal_cls,
-                        f"{ev.event_id}-flush")
-                    if ev.llm_end_result is not None:
-                        ev.llm_calls += 1
                 finalized.append(self._finalize(ev))
         self.ongoing.clear()
         return finalized
