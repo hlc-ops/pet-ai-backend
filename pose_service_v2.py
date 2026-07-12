@@ -118,17 +118,27 @@ SKELETON_LINKS = [
 
 
 class PoseServiceClient:
-    """姿态微服务 HTTP 客户端(主 Python 用)"""
+    """姿态微服务 HTTP 客户端(主 Python 用)
+
+    ⚠ 关键: 用户机器上 Clash TUN 模式会劫持 127.0.0.1:8090 的响应回程
+    所以必须用 Session + trust_env=False 强制绕过环境代理
+    否则 pose 服务处理了 15 次请求, V11 只收到 1 次响应
+    """
 
     def __init__(self, url: str = "http://127.0.0.1:8090"):
         self.url = url
         self._available = None
+        # 独立 session, 忽略 HTTP_PROXY/HTTPS_PROXY 环境变量
+        self._session = requests.Session()
+        self._session.trust_env = False
+        # 显式禁代理, 防止 Clash TUN 劫持 127.0.0.1
+        self._session.proxies = {"http": "", "https": ""}
 
     @property
     def available(self) -> bool:
         if self._available is None:
             try:
-                r = requests.get(f"{self.url}/health", timeout=1)
+                r = self._session.get(f"{self.url}/health", timeout=2)
                 self._available = r.status_code == 200
             except Exception:
                 self._available = False
@@ -154,7 +164,7 @@ class PoseServiceClient:
         b64 = base64.b64encode(buf).decode()
 
         try:
-            r = requests.post(
+            r = self._session.post(
                 f"{self.url}/predict",
                 json={"image_b64": b64},
                 timeout=15)
