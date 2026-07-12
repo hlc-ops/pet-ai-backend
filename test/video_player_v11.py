@@ -532,6 +532,8 @@ def main():
     # 每 N 帧提交一次姿态请求(避免队列爆)
     POSE_REQ_EVERY_N = int(src_fps)  # 每秒 1 次
 
+    exc_memory_until = 0.0  # 排泄记忆窗口截止时刻
+
     while True:
         if not paused:
             ret, frame = cap.read()
@@ -567,6 +569,7 @@ def main():
             # 如果姿态显示强排泄证据, 抑制 drink 事件(避免猫在猫砂盆里蹲下被识别为喝水)
             kps, kp_time, pose_features = pose_worker.latest
             strong_excretion = False
+            middle_excretion = False   # ⭐ 中度排泄证据(cover 猫背身钻砂盆等边缘姿态)
             if kps is not None:
                 draw_pose_skeleton(frame, kps)
                 if animals:
@@ -576,6 +579,8 @@ def main():
                         "animal-0", kps, now, a["cls"],
                         has_bowl_nearby=has_bowl)
                     strong_excretion = exc_result.get("strong_excretion_pose", False)
+                    # 中度: 分数 >=50 (但不到强证据门槛) —— pose 累积证据方向
+                    middle_excretion = exc_result.get("score", 0) >= 50
                     if exc_result.get("just_finished"):
                         e = exc_result["just_finished"]
                         line = (f"排泄 {e['animal_cls']} {int(e['duration'])}s "
@@ -584,13 +589,28 @@ def main():
                         latest.append(line)
                         print(f"[!排泄] {line}")
 
-            # === drink 判定(排泄优先: 强排泄证据时不传 bowls, 抑制 drink 触发)===
+            # === 排泄记忆窗口 ===
+            # 3 条件任一命中就抑制 drink:
+            # 1) 当帧强证据 (三特征全中)
+            # 2) 中度证据 (score >= 50, 姿态在往排泄方向累积)
+            # 3) 最近 8 秒出现过强证据
+            # 4) 已经在跟踪排泄事件 (ongoing)
+            EXC_MEMORY_SEC = 8.0
+            if strong_excretion:
+                exc_memory_until = now + EXC_MEMORY_SEC
+            excretion_active = (
+                strong_excretion
+                or middle_excretion
+                or now < exc_memory_until
+                or len(exc_detector.ongoing) > 0
+            )
+
+            # === drink 判定 ===
             was = set(drink_rules.ongoing.keys())
-            drink_bowls = [] if strong_excretion else bowls
+            drink_bowls = [] if excretion_active else bowls
             debug_pairs, drink_completed = drink_rules.update(
                 animals, drink_bowls, now, frame_bgr=frame)
-            # 强排泄时清空 ongoing drink (避免此前累积的伪事件继续报)
-            if strong_excretion and drink_rules.ongoing:
+            if excretion_active and drink_rules.ongoing:
                 drink_rules.ongoing.clear()
             if set(drink_rules.ongoing.keys()) - was:
                 flash = 6
