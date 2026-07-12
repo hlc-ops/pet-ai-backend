@@ -178,6 +178,9 @@ def predict():
 
     kps = _predict_keypoints(img_up)
     if kps is None:
+        logger.warning(
+            f"[predict] ❌ DLC 未返回 kps (img {orig_w}x{orig_h}, "
+            f"检测器可能没找到四足动物)")
         return jsonify({"keypoints": []})
 
     # 归一化到 (N, 3) [x, y, conf]
@@ -201,6 +204,7 @@ def predict():
     elif kps.ndim == 2:
         kps_out = kps
     else:
+        logger.warning(f"[predict] ❌ kps ndim={kps.ndim} 异常")
         return jsonify({"keypoints": []})
 
     # 缩回原 crop 尺寸(如果之前上采样过)

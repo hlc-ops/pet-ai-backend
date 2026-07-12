@@ -179,6 +179,10 @@ class AsyncPoseWorker:
             t0 = time.time()
             kps = self.pose_svc.predict(crop)
             latency = int((time.time() - t0) * 1000)
+            # 打印所有响应, 包括空的 (帮助 debug 姿态命中率)
+            if kps is None:
+                print(f"[pose] crop {crop.shape[1]}x{crop.shape[0]} "
+                      f"offset=({ox},{oy}) ❌ 服务返空 {latency}ms")
             # 翻译回全帧坐标
             if kps is not None:
                 # 调试:crop 内 kps 范围
