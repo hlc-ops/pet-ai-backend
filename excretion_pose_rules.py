@@ -122,6 +122,7 @@ class PoseExcretionDetector:
             "score": 0,
             "reasons": [],
             "features": features,
+            "strong_excretion_pose": False,
         }
 
         if not features["valid"]:
@@ -193,9 +194,21 @@ class PoseExcretionDetector:
             reasons.append(f"前腿也弯 -15 ({sample.front_leg_angle:.0f}°)")
 
         # ⭐ 特征 7: 现场无盆(排除喝水/进食)
+        # 但若姿态铁证如山(强排泄证据), 忽略 bowl 扣分
+        # 场景: 猫在猫砂盆里排泄, YOLO 误把砂盆识别成 bowl
+        strong_excretion = (
+            sample.rear_leg_angle <= 90       # 深蹲铁证
+            and sample.front_leg_angle >= 150  # 前腿撑直铁证
+            and sample.hip_shoulder_dy >= 15   # 髋部下沉铁证
+        )
+        result["strong_excretion_pose"] = strong_excretion
+
         if has_bowl_nearby:
-            score -= 20
-            reasons.append("现场有盆 -20")
+            if strong_excretion:
+                reasons.append("[强排泄证据] 忽略 bowl 扣分")
+            else:
+                score -= 20
+                reasons.append("现场有盆 -20")
         else:
             score += NO_BOWL_BONUS
             reasons.append(f"无盆 +{NO_BOWL_BONUS}")

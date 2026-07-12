@@ -150,8 +150,12 @@ class AsyncPoseWorker:
                        key=lambda a: (a["box"][2] - a["box"][0])
                                      * (a["box"][3] - a["box"][1]))
             x1, y1, x2, y2 = best["box"]
-            fh, fw = frame.shape[:2]
             bw = x2 - x1; bh = y2 - y1
+            # 过滤只框到头/爪的小检测: YOLO 偶尔只检出局部
+            # crop < 150x150 姿态识别质量太差, 直接跳过本帧
+            if bw < 120 or bh < 120:
+                return
+            fh, fw = frame.shape[:2]
             # 20% padding: crop 更紧, DLC 内部 detector 抓不到别的
             px = int(bw * 0.2); py = int(bh * 0.2)
             cx1 = max(0, int(x1 - px)); cy1 = max(0, int(y1 - py))
@@ -554,30 +558,24 @@ def main():
                 frame, r, names, downgrade_stats)
 
             now = frame_idx / src_fps
-            was = set(drink_rules.ongoing.keys())
-            debug_pairs, drink_completed = drink_rules.update(
-                animals, bowls, now, frame_bgr=frame)
-            if set(drink_rules.ongoing.keys()) - was:
-                flash = 6
 
             # === 异步姿态:每秒提交 1 次 ===
             if animals and frame_idx % POSE_REQ_EVERY_N == 0:
                 pose_worker.request(frame, animals=animals)
 
-            # 读缓存关键点画骨架 + 排泄判定
+            # === 先跑排泄判定(用姿态缓存)===
+            # 如果姿态显示强排泄证据, 抑制 drink 事件(避免猫在猫砂盆里蹲下被识别为喝水)
             kps, kp_time, pose_features = pose_worker.latest
+            strong_excretion = False
             if kps is not None:
                 draw_pose_skeleton(frame, kps)
-                # 用第一只动物 key 做排泄判定(简化)
                 if animals:
                     a = animals[0]
-                    # 现场有盆? 有盆 = 减 20 分, 避免喝水被误判成排泄
                     has_bowl = len(bowls) > 0
-                    # 固定 key 'animal-0': 避免 YOLO 偶尔把 dog 误判成 cat
-                    # 时状态断裂 (类别翻转 → key 变 → 事件重新开始不累积)
                     exc_result = exc_detector.update(
                         "animal-0", kps, now, a["cls"],
                         has_bowl_nearby=has_bowl)
+                    strong_excretion = exc_result.get("strong_excretion_pose", False)
                     if exc_result.get("just_finished"):
                         e = exc_result["just_finished"]
                         line = (f"排泄 {e['animal_cls']} {int(e['duration'])}s "
@@ -585,6 +583,17 @@ def main():
                                 f"后腿={e.get('min_rear_leg_angle',180):.0f}°")
                         latest.append(line)
                         print(f"[!排泄] {line}")
+
+            # === drink 判定(排泄优先: 强排泄证据时不传 bowls, 抑制 drink 触发)===
+            was = set(drink_rules.ongoing.keys())
+            drink_bowls = [] if strong_excretion else bowls
+            debug_pairs, drink_completed = drink_rules.update(
+                animals, drink_bowls, now, frame_bgr=frame)
+            # 强排泄时清空 ongoing drink (避免此前累积的伪事件继续报)
+            if strong_excretion and drink_rules.ongoing:
+                drink_rules.ongoing.clear()
+            if set(drink_rules.ongoing.keys()) - was:
+                flash = 6
 
             for e in drink_completed:
                 line = f"drink {e.animal_cls} {int(e.duration_sec)}s LLM✓{e.llm_confirmed_count}"
