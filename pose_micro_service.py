@@ -225,7 +225,7 @@ def predict():
                 f"[predict] kps 范围 x=[{xs.min():.0f},{xs.max():.0f}] "
                 f"y=[{ys.min():.0f},{ys.max():.0f}] "
                 f"img={orig_w}x{orig_h} 占比={ratio*100:.0f}%")
-            if ratio < 0.25:
+            if ratio < 0.15:   # 从 0.25 放宽到 0.15
                 logger.warning(
                     f"[predict] ❌ 拒绝: kps 只占 crop {ratio*100:.0f}%, "
                     f"极可能是 DLC 抓错噪声, 返空")
