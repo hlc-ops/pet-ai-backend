@@ -573,8 +573,10 @@ def main():
                     a = animals[0]
                     # 现场有盆? 有盆 = 减 20 分, 避免喝水被误判成排泄
                     has_bowl = len(bowls) > 0
+                    # 固定 key 'animal-0': 避免 YOLO 偶尔把 dog 误判成 cat
+                    # 时状态断裂 (类别翻转 → key 变 → 事件重新开始不累积)
                     exc_result = exc_detector.update(
-                        f"{a['cls']}-0", kps, now, a["cls"],
+                        "animal-0", kps, now, a["cls"],
                         has_bowl_nearby=has_bowl)
                     if exc_result.get("just_finished"):
                         e = exc_result["just_finished"]

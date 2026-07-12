@@ -245,6 +245,7 @@ class PoseExcretionDetector:
                         "max_score": ev.max_score,
                         "max_hip_dy": ev.max_hip_dy,
                         "max_back_curv": ev.max_back_curv,
+                        "min_rear_leg_angle": ev.min_rear_leg_angle,
                     }
                 del self.ongoing[animal_key]
             else:
@@ -265,6 +266,9 @@ class PoseExcretionDetector:
                     "duration": dur,
                     "hit": ev.hit,
                     "max_score": ev.max_score,
+                    "max_hip_dy": ev.max_hip_dy,
+                    "max_back_curv": ev.max_back_curv,
+                    "min_rear_leg_angle": ev.min_rear_leg_angle,
                 })
         self.ongoing.clear()
         return finished
