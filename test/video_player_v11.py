@@ -571,11 +571,16 @@ def main():
                 # 用第一只动物 key 做排泄判定(简化)
                 if animals:
                     a = animals[0]
+                    # 现场有盆? 有盆 = 减 20 分, 避免喝水被误判成排泄
+                    has_bowl = len(bowls) > 0
                     exc_result = exc_detector.update(
-                        f"{a['cls']}-0", kps, now, a["cls"])
+                        f"{a['cls']}-0", kps, now, a["cls"],
+                        has_bowl_nearby=has_bowl)
                     if exc_result.get("just_finished"):
                         e = exc_result["just_finished"]
-                        line = f"排泄 {e['animal_cls']} {int(e['duration'])}s"
+                        line = (f"排泄 {e['animal_cls']} {int(e['duration'])}s "
+                                f"score={e['max_score']} "
+                                f"后腿={e.get('min_rear_leg_angle',180):.0f}°")
                         latest.append(line)
                         print(f"[!排泄] {line}")
 

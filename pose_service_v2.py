@@ -237,6 +237,14 @@ def compute_pose_features(keypoints) -> dict:
     br_knee = get_pt("back_right_knee")
     br_paw = get_pt("back_right_paw")
 
+    # 前腿关键点(区分喝水 vs 排泄)
+    fl_thai = get_pt("front_left_thai")
+    fl_knee = get_pt("front_left_knee")
+    fl_paw = get_pt("front_left_paw")
+    fr_thai = get_pt("front_right_thai")
+    fr_knee = get_pt("front_right_knee")
+    fr_paw = get_pt("front_right_paw")
+
     if shoulder is None or hip is None:
         return {
             "valid": False,
@@ -286,6 +294,18 @@ def compute_pose_features(keypoints) -> dict:
     rear_leg_angle = float(np.mean(rear_angles)) if rear_angles else 180.0
     legs_bent = rear_leg_angle < 110  # 排泄蹲姿
 
+    # 前腿角度: 区分排泄 vs 喝水
+    # 排泄: 前腿撑地基本直 (>150°)
+    # 喝水: 前腿也弯 (<130°) 因为脖子够到低处食盆
+    front_angles = []
+    if fl_thai is not None and fl_knee is not None and fl_paw is not None:
+        front_angles.append(_angle_deg(fl_thai, fl_knee, fl_paw))
+    if fr_thai is not None and fr_knee is not None and fr_paw is not None:
+        front_angles.append(_angle_deg(fr_thai, fr_knee, fr_paw))
+    front_leg_angle = float(np.mean(front_angles)) if front_angles else 180.0
+    # 前后腿不对称度: 排泄 = 前直后弯 (差值大), 喝水/坐 = 前后都弯 (差值小)
+    front_rear_asymmetry = front_leg_angle - rear_leg_angle
+
     return {
         "valid": True,
         "hip_shoulder_dy": hip_shoulder_dy,
@@ -293,6 +313,8 @@ def compute_pose_features(keypoints) -> dict:
         "tail_raised": tail_raised,
         "rear_leg_angle": rear_leg_angle,
         "legs_bent": legs_bent,
+        "front_leg_angle": front_leg_angle,
+        "front_rear_asymmetry": front_rear_asymmetry,
         "shoulder": (float(shoulder[0]), float(shoulder[1])),
         "hip": (float(hip[0]), float(hip[1])),
         "tail_base": (float(tail_base[0]), float(tail_base[1]))
