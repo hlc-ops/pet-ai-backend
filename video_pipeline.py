@@ -167,10 +167,12 @@ def process_video(video_path: str, kennel_id: str,
     # 懒导入 V11 规则引擎
     from cascade_rules import CascadeRuleEngine
     from excretion_pose_rules import PoseExcretionDetector
+    from activity_detector import ActivityDetector
     from behavior_rules import CompletedEvent
 
     drink_engine = CascadeRuleEngine(use_llm=True)
     exc_detector = PoseExcretionDetector()
+    act_detector = ActivityDetector()
     exc_memory_until = 0.0
 
     frame_idx = 0
@@ -237,6 +239,20 @@ def process_video(video_path: str, kennel_id: str,
                     camera_id, pet_id, reporter)
                 total_events += 1
 
+            # === 活动检测 (优先级最低)===
+            # 只有当无排泄 + 无饮水 ongoing 时才推 activity 事件
+            act_events = act_detector.update(animals, video_time)
+            higher_priority_active = (
+                len(exc_detector.ongoing) > 0
+                or len(drink_engine.ongoing) > 0
+            )
+            if not higher_priority_active:
+                for ae in act_events:
+                    _push_activity_event(
+                        ae, task_id, request_id, kennel_id, kennel_code,
+                        camera_id, pet_id, reporter)
+                    total_events += 1
+
             frame_idx += 1
 
         # 视频结束, force_flush
@@ -252,6 +268,13 @@ def process_video(video_path: str, kennel_id: str,
                 camera_id, pet_id, end_time, reporter)
             total_exc_events += 1
             total_events += 1
+        # 活动收尾 (最后, 若无更高优先级正在跟踪)
+        for ae in act_detector.force_flush(end_time):
+            if not (len(exc_detector.ongoing) or len(drink_engine.ongoing)):
+                _push_activity_event(
+                    ae, task_id, request_id, kennel_id, kennel_code,
+                    camera_id, pet_id, reporter)
+                total_events += 1
     finally:
         cap.release()
         pose_worker.stop()
@@ -290,6 +313,32 @@ def _push_drink_event(finalized, task_id: str, request_id: str,
     setattr(ev, "request_id", request_id)
     setattr(ev, "kennel_code", kennel_code)
     setattr(ev, "video_offset_sec", float(finalized.start_time))
+    reporter.submit(ev)
+
+
+def _push_activity_event(a_dict, task_id: str, request_id: str,
+                          kennel_id: str, kennel_code: str,
+                          camera_id: str, pet_id: str, reporter):
+    """把活动检测器返回的 dict 转成 CompletedEvent 推 Java"""
+    from behavior_rules import CompletedEvent
+    ev = CompletedEvent(
+        event_id=a_dict.get("event_id", f"evt-act-{uuid.uuid4().hex[:12]}"),
+        event_type="activity",
+        kennel_id=kennel_id,
+        camera_id=camera_id,
+        pet_id=pet_id,
+        detected_class=a_dict.get("animal_cls", "unknown"),
+        start_time=time.time(),
+        end_time=time.time() + a_dict.get("duration", 0),
+        duration_sec=float(a_dict.get("duration", 0)),
+        hit_count=1,
+        confidence=0.9,
+        snapshot_path=None,
+    )
+    setattr(ev, "task_id", task_id)
+    setattr(ev, "request_id", request_id)
+    setattr(ev, "kennel_code", kennel_code)
+    setattr(ev, "video_offset_sec", float(a_dict.get("start_time", 0)))
     reporter.submit(ev)
 
 

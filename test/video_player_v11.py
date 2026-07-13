@@ -265,6 +265,41 @@ def maybe_downgrade_to_pet(cls_name, conf, other_animal_confs):
     return cls_name
 
 
+# ==================== 时序类别投票 (消除标签闪烁) ====================
+from collections import deque, Counter
+
+class _ClassVoter:
+    """按 bbox 位置追踪类别投票, 过去 N 帧多数决定当前显示
+
+    key = 圆心量化到 40px 网格 · 简单不需 IoU 匹配
+    """
+    def __init__(self, window=10):
+        self.window = window
+        self.history = {}   # key -> deque[cls_name]
+
+    def _key(self, box):
+        cx = int((box[0]+box[2]) / 2 / 40)
+        cy = int((box[1]+box[3]) / 2 / 40)
+        return (cx, cy)
+
+    def vote(self, box, raw_name):
+        key = self._key(box)
+        if key not in self.history:
+            self.history[key] = deque(maxlen=self.window)
+        self.history[key].append(raw_name)
+        # 返回窗口内出现最多的类别
+        return Counter(self.history[key]).most_common(1)[0][0]
+
+    def cleanup_stale(self, keep_keys):
+        """清掉太久没更新的 key"""
+        for k in list(self.history.keys()):
+            if k not in keep_keys:
+                del self.history[k]
+
+
+_class_voter = _ClassVoter(window=10)
+
+
 def parse_and_draw(frame, r, names, downgrade_stats):
     class_counts = {}
     animals, bowls = [], []
@@ -280,11 +315,16 @@ def parse_and_draw(frame, r, names, downgrade_stats):
         if n in ("cat", "dog", "monkey", "other_primate"):
             animal_conf_map[n] = max(animal_conf_map.get(n, 0), float(conf_arr[i]))
     overlay = frame.copy()
+    active_keys = set()
     for i, (box, cls, conf) in enumerate(zip(boxes, cls_arr, conf_arr)):
         original = names.get(int(cls), str(cls))
         name = maybe_downgrade_to_pet(original, float(conf), animal_conf_map)
         if name != original:
             downgrade_stats["count"] += 1
+        # ⭐ 时序投票平滑: 用过去 10 帧最多的类别, 消除闪烁
+        if name in ("cat","dog","monkey","other_primate","pet"):
+            name = _class_voter.vote(box, name)
+            active_keys.add(_class_voter._key(box))
         color = CLASS_COLORS.get(name, (200, 200, 200))
         class_counts[name] = class_counts.get(name, 0) + 1
         mask_pts = None
@@ -671,12 +711,16 @@ def main():
             active_texts = []
             for k, ev in drink_rules.ongoing.items():
                 dur = ev.last_seen - ev.start_time
-                active_texts.append(
-                    f"CAT DRINK {dur:.1f}s" if ev.animal_cls == "cat"
-                    else f"{ev.animal_cls.upper()} DRINK {dur:.1f}s")
+                # 中文标签: "进食/饮水"
+                cls_zh = {"cat":"猫", "dog":"狗", "pet":"宠物",
+                          "monkey":"猴", "other_primate":"灵长"}.get(
+                    ev.animal_cls, ev.animal_cls.upper())
+                active_texts.append(f"[进食/饮水] {cls_zh} {dur:.1f}s")
             for k, ev in exc_detector.ongoing.items():
                 dur = ev.last_seen - ev.start_time
-                active_texts.append(f"[排泄] {ev.animal_cls.upper()} {dur:.1f}s")
+                cls_zh = {"cat":"猫", "dog":"狗", "pet":"宠物"}.get(
+                    ev.animal_cls, ev.animal_cls.upper())
+                active_texts.append(f"[排泄] {cls_zh} {dur:.1f}s")
 
             banner = draw_banner(fw, active_texts, flash)
             info = np.zeros((30, fw, 3), dtype=np.uint8)
