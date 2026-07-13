@@ -1,15 +1,12 @@
-# ==================== 模型权重(去 Release 挂,别入 git)====================
-model/*.pt
-model/*.onnx
-model/*.engine
-model/*_openvino_model/
-model/*.torchscript
-# 顶层意外下载的权重也排除
-/*.pt
-/*.onnx
+# ==================== 模型权重 ====================
+# 为交付朋友一键 clone 就能用, 权重全部入库 (每个文件 <100MB, GitHub 允许)
+# 顶层意外下载的其他 pt 权重排除
+/best.pt
+/best.onnx
 /*.engine
+/*.torchscript
 !model/.gitkeep
-# 训练文档保留(小,能证明模型质量)
+# 训练可视化
 !model/results.png
 !model/confusion_matrix.png
 !model/PR_curve.png
