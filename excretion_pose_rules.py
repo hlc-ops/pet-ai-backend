@@ -195,12 +195,14 @@ class PoseExcretionDetector:
             reasons.append(f"前腿也弯 -15 ({sample.front_leg_angle:.0f}°)")
 
         # ⭐ 特征 7: 现场无盆(排除喝水/进食)
-        # 若姿态铁证如山(强排泄证据), 忽略 bowl 扣分
         # 排泄姿态: 后腿深弯(猫弓背深蹲/狗后腿岔开) + 前腿撑直 + 髋下沉
+        # 有盆时门槛更严 (避免坐姿喝水的猫 rear~85° 也命中 strong)
+        rear_limit = 75 if has_bowl_nearby else 90
+        hip_limit = 25 if has_bowl_nearby else 15
         strong_excretion = (
-            sample.rear_leg_angle <= 90       # 后腿深弯 (蹲 or 岔开)
-            and sample.front_leg_angle >= 150  # 前腿撑直
-            and sample.hip_shoulder_dy >= 15   # 髋低于肩
+            sample.rear_leg_angle <= rear_limit
+            and sample.front_leg_angle >= 150   # 前腿撑直
+            and sample.hip_shoulder_dy >= hip_limit
         )
         result["strong_excretion_pose"] = strong_excretion
 
