@@ -453,12 +453,20 @@ def fit(display, max_w, max_h, zoom):
 
 def main():
     from ultralytics import YOLO
+    from pathlib import Path
 
     mp = resolve_model()
     if not mp: return
-    print(f"[+] YOLO 模型: {mp}")
+    print(f"[+] YOLO 主模型: {mp}")
     model = YOLO(mp)
     names = model.names
+
+    # 副模型: 专管容器 (bowl/cup/bottle), 与后端保持一致
+    secondary_model = None
+    sec_path = Path(__file__).parent.parent / "yolo11n-seg.pt"
+    if sec_path.exists():
+        print(f"[+] YOLO 副模型: {sec_path.name}  (容器检测)")
+        secondary_model = YOLO(str(sec_path))
 
     verifier = get_verifier()
     print(f"[+] LLM: {verifier.available}")
@@ -562,6 +570,33 @@ def main():
                               verbose=False)[0]
             frame, cnt, animals, bowls = parse_and_draw(
                 frame, r, names, downgrade_stats)
+
+            # 副模型 (yolo11n-seg): 补充容器检测
+            if secondary_model is not None:
+                r2 = secondary_model.predict(
+                    frame, conf=0.35, verbose=False)[0]
+                if r2.boxes is not None and len(r2.boxes):
+                    xyxy2 = r2.boxes.xyxy.cpu().numpy()
+                    cls2 = r2.boxes.cls.cpu().numpy().astype(int)
+                    conf2 = r2.boxes.conf.cpu().numpy()
+                    m2 = r2.masks.xy if r2.masks is not None else None
+                    # COCO: bowl=45 cup=41 bottle=39
+                    for i, c in enumerate(cls2):
+                        if int(c) not in (39, 41, 45): continue
+                        cls_name = {39:'bottle', 41:'cup', 45:'bowl'}[int(c)]
+                        mask_pts = m2[i].tolist() if m2 is not None and i < len(m2) else None
+                        bowls.append({
+                            "box": xyxy2[i].tolist(),
+                            "cls": cls_name,
+                            "conf": float(conf2[i]),
+                            "mask_pts": mask_pts,
+                        })
+                        cnt[cls_name] = cnt.get(cls_name, 0) + 1
+                        # 副模型 bowl 画绿框
+                        x1,y1,x2,y2 = xyxy2[i].astype(int)
+                        cv2.rectangle(frame, (x1,y1), (x2,y2), (0,255,0), 2)
+                        cv2.putText(frame, f"{cls_name}2 {float(conf2[i]):.2f}",
+                                    (x1, y1-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 2)
 
             now = frame_idx / src_fps
 

@@ -45,6 +45,15 @@ class Config:
     USE_COCO_MAPPING = os.environ.get(
         "USE_COCO_MAPPING", "false").lower() == "true"
 
+    # ==================== 双模型架构 (可选) ====================
+    # 副模型: 专管容器 (bowl/plate/cup/bottle)
+    # 主模型只出动物, 副模型只出容器, 并行推理后合并
+    # 空 = 不启用副模型, 用主模型的 bowl 类
+    SECONDARY_MODEL_PATH = os.environ.get("SECONDARY_MODEL_PATH", "")
+    # 副模型是否用 COCO 类别映射 (COCO: bowl=45 plate=45 cup=41 bottle=39)
+    SECONDARY_USE_COCO = os.environ.get(
+        "SECONDARY_USE_COCO", "true").lower() == "true"
+
     # 你的项目类别定义
     CLASSES = {
         "cat": 0, "dog": 1, "monkey": 2,
@@ -70,11 +79,15 @@ class Config:
     MAX_EVENT_GAP_SEC = float(
         os.environ.get("MAX_EVENT_GAP_SEC", "2.0"))
 
-    # ==================== 事件推送 ====================
-    # 甲方后端接收事件的 URL。空 = 不推送,只本地记录
+    # ==================== 事件推送 (甲方 Java 后端) ====================
+    # 行为事件回调 URL (POST /api/ai/behavior-events)
     CALLBACK_URL = os.environ.get("CALLBACK_URL", "")
+    # 任务状态回调 URL (POST /api/ai/analysis-jobs/status)
+    TASK_CALLBACK_URL = os.environ.get("TASK_CALLBACK_URL", "")
     # 推送鉴权(可选)
     CALLBACK_AUTH_TOKEN = os.environ.get("CALLBACK_AUTH_TOKEN", "")
+    # Java 请求 Python 时的鉴权(可选)
+    API_AUTH_TOKEN = os.environ.get("API_AUTH_TOKEN", "")
     # 推送重试次数
     CALLBACK_MAX_RETRIES = int(
         os.environ.get("CALLBACK_MAX_RETRIES", "3"))
@@ -82,9 +95,28 @@ class Config:
     CALLBACK_TIMEOUT_SEC = int(
         os.environ.get("CALLBACK_TIMEOUT_SEC", "5"))
 
+    # ==================== 队列 ====================
+    MAX_CONCURRENT_TASKS = int(
+        os.environ.get("MAX_CONCURRENT_TASKS", "1"))
+    MAX_QUEUED_TASKS = int(
+        os.environ.get("MAX_QUEUED_TASKS", "8"))
+    MAX_QUEUED_EVENTS = int(
+        os.environ.get("MAX_QUEUED_EVENTS", "100"))
+    DELETE_UPLOAD_AFTER_PROCESSING = os.environ.get(
+        "DELETE_UPLOAD_AFTER_PROCESSING", "false").lower() == "true"
+
+    # ==================== 事件冷却池 ====================
+    # 同一犬位 + 同行为在 N 秒内只推 1 次, 避免风暴
+    # 0 = 关闭冷却 (每个事件都推)
+    EVENT_COOLDOWN_SEC = int(
+        os.environ.get("EVENT_COOLDOWN_SEC", "60"))
+
     # ==================== 文件上传限制 ====================
     MAX_CONTENT_LENGTH = MAX_VIDEO_SIZE_MB * 1024 * 1024
-    ALLOWED_VIDEO_EXTS = {"mp4", "avi", "mov", "mkv", "flv"}
+    # 加 webm/m4v 支持 (甲方 API 文档要求)
+    ALLOWED_VIDEO_EXTS = {
+        "mp4", "avi", "mov", "mkv", "flv", "webm", "m4v",
+    }
 
     # ==================== 初始化目录 ====================
     @classmethod
