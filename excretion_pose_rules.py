@@ -55,11 +55,12 @@ SCORE_ASYMMETRY = 25             # 前后腿不对称加分
 FRONT_LEG_STRAIGHT_MIN = 150     # 前腿直立最低角度
 FRONT_REAR_ASYMMETRY_MIN = 30    # 前后腿角度差最小值
 
-SCORE_THRESHOLD = 60             # 综合分阈值 (最高可能 100+)
+SCORE_THRESHOLD = 60             # 无盆时综合分阈值
+SCORE_THRESHOLD_WITH_BOWL = 90   # 有盆时更严 (避免"猫坐着喝水"误判为排泄)
 STABLE_WINDOW_SEC = 3.0
 STABLE_MAX_MOVE_PX = 25
-MIN_DURATION_SEC = 3.0           # 4.0 → 3.0: CPU pose 稀疏, 门槛降一点
-MAX_GAP_SEC = 6.0                # 2.0 → 6.0: pose 请求可能间隔很大, 允许长空档
+MIN_DURATION_SEC = 4.0           # 3.0 → 4.0: 短暂坐姿/低头喝水不算排泄
+MAX_GAP_SEC = 6.0
 HISTORY_LEN = 90
 
 
@@ -215,7 +216,9 @@ class PoseExcretionDetector:
 
         result["score"] = score
         result["reasons"] = reasons
-        is_excreting = score >= SCORE_THRESHOLD
+        # 有盆时门槛更严 (避免坐姿喝水误判排泄), 除非姿态铁证
+        threshold = SCORE_THRESHOLD_WITH_BOWL if has_bowl_nearby else SCORE_THRESHOLD
+        is_excreting = score >= threshold
 
         # 事件状态机
         if is_excreting:

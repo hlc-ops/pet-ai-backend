@@ -38,11 +38,8 @@ LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "")
 LLM_MODEL = os.environ.get("LLM_MODEL", "")
 LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "30"))
 
-# 自动读代理配置(v9+ 新加,避免用户每次手动 set env)
-LLM_PROXY = os.environ.get("LLM_PROXY", "")
-if LLM_PROXY:
-    os.environ.setdefault("HTTP_PROXY", LLM_PROXY)
-    os.environ.setdefault("HTTPS_PROXY", LLM_PROXY)
+# 阿里云 Qwen / 智谱 GLM 都是国内域名, 不需要代理
+# 之前的 LLM_PROXY 环境变量已废弃 (改用 Session.trust_env=False)
 
 LLM_DEFAULTS = {
     "qwen": {
