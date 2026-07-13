@@ -136,12 +136,21 @@ class PoseServiceClient:
 
     @property
     def available(self) -> bool:
+        # 首次调用: 重试 3 次(应对 Flask 冷启动 + Clash TUN 首次握手慢)
+        # 一旦确定 True/False 就缓存, 后续帧不再重试
         if self._available is None:
-            try:
-                r = self._session.get(f"{self.url}/health", timeout=2)
-                self._available = r.status_code == 200
-            except Exception:
-                self._available = False
+            import time
+            for attempt in range(3):
+                try:
+                    r = self._session.get(f"{self.url}/health", timeout=5)
+                    if r.status_code == 200:
+                        self._available = True
+                        return True
+                except Exception:
+                    pass
+                if attempt < 2:
+                    time.sleep(1.0)
+            self._available = False
         return self._available
 
     def predict(self, image_bgr: np.ndarray,
