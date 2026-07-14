@@ -69,19 +69,25 @@ class _SubModel:
                 f"没 mask 输出, 行为规则可能失效")
 
         if self.use_coco:
-            # COCO 映射: 只提取动物或容器
+            # COCO 映射
             if self.role == "primary":
+                # 主模型: 动物 (+ 若无副模型, 也要出容器)
                 self._name_map = dict(COCO_ANIMAL_IDS)
+                # 单模型模式下主模型也拿容器 (由 ModelService 决定后设 flag)
+                self._include_containers = False
             else:
                 self._name_map = dict(COCO_CONTAINER_IDS)
+                self._include_containers = True
         else:
-            # 项目类别映射
+            # 项目类别映射 (用户自训 best.pt)
             if self.role == "primary":
                 self._name_map = {v: k for k, v in Config.CLASSES.items()
                                     if k in ("cat","dog","monkey","other_primate")}
+                self._include_containers = False
             else:
                 self._name_map = {v: k for k, v in Config.CLASSES.items()
                                     if k in ("bowl",)}
+                self._include_containers = True
 
         logger.info(
             f"[{self.role}] 加载 {self.path} · task={task} · "
@@ -160,7 +166,16 @@ class ModelService:
                 logger.warning(f"副模型加载失败, 降级单模型: {e}")
                 self.secondary = None
         else:
-            logger.info("单模型模式 (bowl 从主模型出)")
+            logger.info("单模型模式 (主模型同时出动物和容器)")
+            # 单模型模式: 主模型的 name_map 加入容器类
+            if self.primary.use_coco:
+                self.primary._name_map.update(COCO_CONTAINER_IDS)
+            else:
+                # 项目类别里的 bowl
+                for k, v in Config.CLASSES.items():
+                    if k == "bowl":
+                        self.primary._name_map[v] = k
+            self.primary._include_containers = True
 
         # 线程池 for 并行
         self._pool = ThreadPoolExecutor(max_workers=2)
