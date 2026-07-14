@@ -180,6 +180,10 @@ def process_video(video_path: str, kennel_id: str,
     total_events = 0
     total_exc_events = 0
 
+    # LLM 发现层用: 记录被规则漏掉时"疑似有动物"的帧
+    # 视频结束时若 total_events == 0 且这里有帧, 抽 3 帧问 LLM
+    llm_scan_candidates = []   # list of (video_time, frame_bgr, detected_class)
+
     try:
         while True:
             ret, frame = cap.read()
@@ -194,6 +198,11 @@ def process_video(video_path: str, kennel_id: str,
             # 转换 mask 字段名: model_svc 返回 "mask", cascade_rules 期望 "mask_pts"
             animals = [dict(a, mask_pts=a.get("mask")) for a in det.animals]
             bowls   = [dict(b, mask_pts=b.get("mask")) for b in det.bowls]
+
+            # 存 LLM 发现层的候选帧 (有动物就存, 视频末若 0 事件再抽)
+            if animals:
+                llm_scan_candidates.append(
+                    (video_time, frame.copy(), animals[0]["cls"]))
 
             # 每秒发一次姿态请求
             if pose_worker.available and animals and frame_idx % int(src_fps) == 0:
@@ -275,19 +284,98 @@ def process_video(video_path: str, kennel_id: str,
                     ae, task_id, request_id, kennel_id, kennel_code,
                     camera_id, pet_id, reporter)
                 total_events += 1
+
+        # ⭐ LLM 发现层: 规则完全 0 事件时, 抽 3 帧问 LLM
+        llm_discovered_events = 0
+        if total_events == 0 and llm_scan_candidates:
+            llm_discovered_events = _llm_discover_scan(
+                llm_scan_candidates, task_id, request_id,
+                kennel_id, kennel_code, camera_id, pet_id, reporter)
+            total_events += llm_discovered_events
     finally:
         cap.release()
         pose_worker.stop()
 
     logger.info(
         f"[{task_id}] 完成: 抽帧 {inferred} 张, "
-        f"drink+excretion 事件 {total_events} 个 (排泄 {total_exc_events})")
+        f"drink+excretion 事件 {total_events} 个 "
+        f"(排泄 {total_exc_events}, LLM发现 {llm_discovered_events})")
     return {
         "framesInferred": inferred,
         "eventsProduced": total_events,
         "eventsReported": total_events,
         "excretionEvents": total_exc_events,
+        "llmDiscoveredEvents": llm_discovered_events,
     }
+
+
+def _llm_discover_scan(candidates, task_id: str, request_id: str,
+                        kennel_id: str, kennel_code: str,
+                        camera_id: str, pet_id: str, reporter) -> int:
+    """LLM 发现层: 规则漏检时, 均匀抽 3 帧问 Qwen VL
+
+    candidates: [(video_time, frame_bgr, cls), ...]
+    返回 LLM 判定为 True 后推送的事件数
+    """
+    from llm_verifier import get_verifier
+    verifier = get_verifier()
+    if not verifier or not verifier.available:
+        logger.info(f"[{task_id}] LLM 未启用, 跳过 LLM 发现")
+        return 0
+    if len(candidates) < 3:
+        return 0
+    # 均匀抽 3 帧: 1/4, 1/2, 3/4 位置
+    n = len(candidates)
+    picks = [candidates[n // 4], candidates[n // 2], candidates[3 * n // 4]]
+    logger.info(
+        f"[{task_id}] 🔎 LLM 发现层触发: 规则 0 事件, 抽 3 帧问 Qwen VL")
+
+    pushed = 0
+    votes = {"drinking": 0, "excretion": 0, "feeding": 0}
+    reasons = []
+    for vt, frame, cls in picks:
+        # 对每帧都试 drinking + excretion
+        for evt_type in ("drinking", "excretion"):
+            r = verifier.verify_behavior(
+                frame, evt_type, cls,
+                f"{task_id}-llm-discover-{int(vt)}",
+                extra_context=f"规则未触发, LLM 发现层")
+            if r is not None and r.confirmed:
+                votes[evt_type] += 1
+                reasons.append(f"t={vt:.0f}s {evt_type}: {r.reason}")
+                break
+
+    # 3 次里 >=2 次同意 → 推送事件
+    for evt_type, cnt in votes.items():
+        if cnt >= 2:
+            from behavior_rules import CompletedEvent
+            ev = CompletedEvent(
+                event_id=f"evt-llm-{uuid.uuid4().hex[:12]}",
+                event_type=evt_type,
+                kennel_id=kennel_id,
+                camera_id=camera_id,
+                pet_id=pet_id,
+                detected_class=picks[0][2],
+                start_time=time.time(),
+                end_time=time.time(),
+                duration_sec=0,
+                hit_count=cnt,
+                confidence=cnt / 3.0,
+                snapshot_path=None,
+            )
+            setattr(ev, "task_id", task_id)
+            setattr(ev, "request_id", request_id)
+            setattr(ev, "kennel_code", kennel_code)
+            setattr(ev, "video_offset_sec", picks[0][0])
+            reporter.submit(ev)
+            pushed += 1
+            logger.info(
+                f"[{task_id}] ✨ LLM 发现事件: {evt_type} · "
+                f"3帧中{cnt}帧同意 · " + " | ".join(reasons))
+    if not pushed:
+        logger.info(
+            f"[{task_id}] LLM 发现层: 3 次抽帧均无一致行为, 视频真无事件")
+    return pushed
 
 
 def _push_drink_event(finalized, task_id: str, request_id: str,
