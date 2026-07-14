@@ -217,6 +217,16 @@ class EventReporter:
                 # 通过冷却, 记录时间
                 self._cooldown_pool[key] = now
 
+        # ⭐ 无论 CALLBACK_URL 通不通, 都把事件存到 TASKS[taskId].events
+        # 供朋友前端 GET /api/tasks/{taskId} 轮询兜底
+        task_id = payload.get("taskId", "")
+        if task_id:
+            try:
+                from app import append_event_to_task
+                append_event_to_task(task_id, payload)
+            except Exception as e:
+                logger.debug(f"存 task events 失败: {e}")
+
         if not Config.CALLBACK_URL:
             return
 

@@ -27,9 +27,17 @@ from config import Config
 
 
 # ============ 内存任务表 (进程内, 演示级) ============
-# task_id -> dict{status, requestId, kennelId, kennelCode, cameraId, petId, result, error}
+# task_id -> dict{status, requestId, kennelId, kennelCode, cameraId, petId, result, error, events}
+# events 里是本 task 产生的所有行为事件, 供 GET /api/tasks/{taskId} 轮询用
 TASKS = {}
 TASKS_LOCK = threading.Lock()
+
+
+def append_event_to_task(task_id: str, event_payload: dict):
+    """给 task 添加事件 (event_reporter 里推事件时同步调用)"""
+    with TASKS_LOCK:
+        if task_id in TASKS:
+            TASKS[task_id].setdefault("events", []).append(event_payload)
 
 # 简单信号量: 限制并发推理 + 队列上限
 _INFERENCE_SEM = threading.Semaphore(Config.MAX_CONCURRENT_TASKS)

@@ -350,7 +350,7 @@ def parse_and_draw(frame, r, names, downgrade_stats):
                 "mask_pts": mask_pts}
         if name in ("cat", "dog", "monkey", "other_primate", "pet"):
             animals.append(info)
-        elif name == "bowl":
+        elif name in ("bowl", "cup", "bottle"):   # 支持 COCO 三种容器
             bowls.append(info)
     frame[:] = cv2.addWeighted(frame, 0.6, overlay, 0.4, 0)
     return frame, class_counts, animals, bowls
@@ -506,11 +506,15 @@ def main():
     names = model.names
 
     # 副模型: 专管容器 (bowl/cup/bottle), 与后端保持一致
+    # 若主模型已经是 yolo11n-seg (COCO 自带容器), 不加载副模型避免重复推理
     secondary_model = None
-    sec_path = Path(__file__).parent.parent / "yolo11n-seg.pt"
-    if sec_path.exists():
-        print(f"[+] YOLO 副模型: {sec_path.name}  (容器检测)")
-        secondary_model = YOLO(str(sec_path))
+    if "yolo11n-seg" not in mp.lower():
+        sec_path = Path(__file__).parent.parent / "yolo11n-seg.pt"
+        if sec_path.exists():
+            print(f"[+] YOLO 副模型: {sec_path.name}  (容器检测)")
+            secondary_model = YOLO(str(sec_path))
+    else:
+        print(f"[+] 主模型是 yolo11n-seg 单模型全干 (cat/dog/bowl/cup/bottle 5 类)")
 
     verifier = get_verifier()
     print(f"[+] LLM: {verifier.available}")
