@@ -180,9 +180,13 @@ def process_video(video_path: str, kennel_id: str,
     total_events = 0
     total_exc_events = 0
 
-    # LLM 发现层用: 记录被规则漏掉时"疑似有动物"的帧
-    # 视频结束时若 total_events == 0 且这里有帧, 抽 3 帧问 LLM
+    # LLM 发现层用:
+    # 1) 处理中每 LLM_PERIODIC_SEC 秒定时抽 1 帧问 LLM (实时)
+    # 2) 视频结束若还是 0 事件, 抽 3 帧兜底
     llm_scan_candidates = []   # list of (video_time, frame_bgr, detected_class)
+    LLM_PERIODIC_SEC = 20.0     # 定时采样间隔
+    llm_last_check = 0.0
+    llm_periodic_events = 0     # 记录定时 LLM 触发的事件数
 
     try:
         while True:
@@ -262,6 +266,20 @@ def process_video(video_path: str, kennel_id: str,
                         camera_id, pet_id, reporter)
                     total_events += 1
 
+            # === LLM 定时采样 (每 LLM_PERIODIC_SEC 秒抽 1 帧问 Qwen VL) ===
+            # 条件: 有动物 + 无 drink/exc ongoing + 距上次检查 >= 20s
+            if (animals
+                    and not higher_priority_active
+                    and video_time - llm_last_check >= LLM_PERIODIC_SEC):
+                llm_last_check = video_time
+                pushed = _llm_periodic_check(
+                    frame, video_time, animals[0]["cls"],
+                    task_id, request_id, kennel_id, kennel_code,
+                    camera_id, pet_id, reporter)
+                if pushed:
+                    llm_periodic_events += pushed
+                    total_events += pushed
+
             frame_idx += 1
 
         # 视频结束, force_flush
@@ -297,16 +315,64 @@ def process_video(video_path: str, kennel_id: str,
         pose_worker.stop()
 
     logger.info(
-        f"[{task_id}] 完成: 抽帧 {inferred} 张, "
-        f"drink+excretion 事件 {total_events} 个 "
-        f"(排泄 {total_exc_events}, LLM发现 {llm_discovered_events})")
+        f"[{task_id}] 完成: 抽帧 {inferred} 张, 事件 {total_events} 个 "
+        f"(排泄 {total_exc_events}, "
+        f"LLM 定时 {llm_periodic_events}, LLM 末尾发现 {llm_discovered_events})")
     return {
         "framesInferred": inferred,
         "eventsProduced": total_events,
         "eventsReported": total_events,
         "excretionEvents": total_exc_events,
+        "llmPeriodicEvents": llm_periodic_events,
         "llmDiscoveredEvents": llm_discovered_events,
     }
+
+
+def _llm_periodic_check(frame, video_time: float, animal_cls: str,
+                         task_id: str, request_id: str,
+                         kennel_id: str, kennel_code: str,
+                         camera_id: str, pet_id: str, reporter) -> int:
+    """定时 LLM 采样: 单帧问 Qwen VL 有无 drinking/excretion 行为
+    有则立刻推事件. 返回推送事件数.
+    """
+    from llm_verifier import get_verifier
+    verifier = get_verifier()
+    if not verifier or not verifier.available:
+        return 0
+    pushed = 0
+    for evt_type in ("drinking", "excretion"):
+        r = verifier.verify_behavior(
+            frame, evt_type, animal_cls,
+            f"{task_id}-llm-periodic-{int(video_time)}",
+            extra_context=f"定时采样 t={video_time:.0f}s")
+        if r is not None and r.confirmed and r.confidence >= 0.7:
+            from behavior_rules import CompletedEvent
+            ev = CompletedEvent(
+                event_id=f"evt-llm-{uuid.uuid4().hex[:12]}",
+                event_type=evt_type,
+                kennel_id=kennel_id,
+                camera_id=camera_id,
+                pet_id=pet_id,
+                detected_class=animal_cls,
+                start_time=time.time(),
+                end_time=time.time(),
+                duration_sec=0,
+                hit_count=1,
+                confidence=float(r.confidence),
+                snapshot_path=None,
+            )
+            setattr(ev, "task_id", task_id)
+            setattr(ev, "request_id", request_id)
+            setattr(ev, "kennel_code", kennel_code)
+            setattr(ev, "video_offset_sec", video_time)
+            reporter.submit(ev)
+            pushed += 1
+            logger.info(
+                f"[{task_id}] 🔍 LLM 定时采样命中: {evt_type} "
+                f"t={video_time:.0f}s conf={r.confidence:.2f} "
+                f"reason={r.reason[:60]}")
+            break  # 单帧只推一个类型的事件
+    return pushed
 
 
 def _llm_discover_scan(candidates, task_id: str, request_id: str,
