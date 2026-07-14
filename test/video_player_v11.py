@@ -254,14 +254,18 @@ def draw_pose_skeleton(frame, keypoints, min_conf=KP_MIN_CONF):
 
 
 def maybe_downgrade_to_pet(cls_name, conf, other_animal_confs):
+    """类别映射:
+    - monkey / other_primate → 映射到 cat 或 dog (取分数高的)
+    - 低置信度依然显示原类别 (由时序投票平滑保底, 避免 pet 太多)
+    """
     if cls_name not in ("cat", "dog", "monkey", "other_primate"):
         return cls_name
-    if conf < PET_MAX_CONF: return "pet"
-    max_other = max(
-        [c for k, c in other_animal_confs.items() if k != cls_name],
-        default=0)
-    if conf - max_other < PET_UNCERTAINTY_THRESHOLD and max_other > 0.3:
-        return "pet"
+    # 灵长类归到 cat/dog
+    if cls_name in ("monkey", "other_primate"):
+        cat_c = other_animal_confs.get("cat", 0)
+        dog_c = other_animal_confs.get("dog", 0)
+        return "cat" if cat_c >= dog_c else "dog"
+    # cat 和 dog 直接返回, 由时序投票 _ClassVoter 稳定标签
     return cls_name
 
 
